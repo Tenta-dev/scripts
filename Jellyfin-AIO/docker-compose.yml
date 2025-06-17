@@ -1,0 +1,556 @@
+version: "3.0"
+
+networks:
+  proxy:
+    external: true
+  jellyfin_default:
+    external: true
+  starr:
+    external: true
+  jellystat:
+    external: true
+  gluetun_network:
+    external: true
+      
+services:
+  # REVERSE PROXY IS IN OTHER DOCKER COMPOSE STACK
+
+  #Jellyfin - used to display the media
+  #This can also be replaced by Emby/Plex
+  jellyfin:
+    image: ghcr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - JELLYFIN_PublishedServerUrl=${JELLYFIN_URL}
+    group_add:
+      - '993' # Change this to match your "render" host group id and remove this comment
+      - '44'
+    ports:
+      - 8096:8096
+      - 8920:8920
+    devices:
+     - /dev/dri/renderD128:/dev/dri/renderD128 #Required for jellyfin HW transcoding / QuickSync
+    volumes:
+      - ${BASE_PATH}/jellyfin/config:/config
+      - ${MEDIA_SHARE}/media:/media
+      - ${BASE_PATH}/jellyfin/transcode:/config/cache/transcodes
+      - ${BASE_PATH}/swag/config/keys/letsencrypt:/certificates
+    restart: unless-stopped
+    networks:
+      - proxy
+      - starr
+    
+  #Radarr - used to find movies automatically
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${BASE_PATH}/radarr/config:/config
+      - ${MEDIA_SHARE}:/data #Access to the entire /media
+    ports:
+      - 7878:7878
+    networks:
+      proxy:
+      starr:
+      gluetun_network:
+        ipv4_address: ${RADARR_IPV4}
+    restart: unless-stopped
+    
+  #Sonarr - used to find shows automatically
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${BASE_PATH}/sonarr/config:/config
+      - ${MEDIA_SHARE}:/data #Access to the entire /media
+    ports:
+      - 8989:8989
+    networks:
+      proxy:
+      starr:
+      gluetun_network:
+        ipv4_address: ${SONARR_IPV4}
+    restart: unless-stopped
+
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ${BASE_PATH}/gluetun/tmp:/tmp/gluetun
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      # See https://github.com/qdm12/gluetun-wiki/tree/main/setup#setup
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      # Wireguard:
+      - WIREGUARD_PUBLIC_KEY=${WIREGUARD_PUBLIC_KEY} # "PublicKey" under [Peer] in WG Config
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY} # "PrivateKey" under [Interface] in WG Config - only shown on config creation
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES} # "Address" under [Interface] in WG Config
+      - VPN_ENDPOINT_IP=${VPN_ENDPOINT_IP} # "Endpoint" under [Peer] in WG Config
+      - VPN_ENDPOINT_PORT=51820 # should be the default 51820 but can confirm by seeing the port after IP in "Endpoint"
+      - VPN_DNS_ADDRESS=${VPN_DNS_ADDRESS} # "DNS" under [Interface] in WG Config
+      - VPN_PORT_FORWARDING=on
+      - VPN_PORT_FORWARDING_PROVIDER=protonvpn
+      # Timezone for accurate log times
+      - TZ=${TZ} # Change to your TZ
+      # Server list updater
+      # See https://github.com/qdm12/gluetun-wiki/blob/main/setup/servers.md#update-the-vpn-servers-list
+      - UPDATER_PERIOD=24h
+    ports:
+      - 8080:8080/tcp # qBit
+      - 8694:8694/tcp # qBit
+      - 8191:8191/tcp # flaresolverr
+      - 9696:9696/tcp # prowlarr
+    networks:
+      - starr
+      - proxy
+      - gluetun_network
+    # IF VPN CANNOT CONNECT, USE BELOW COMMAND TO UPDATE SERVERS.
+    # command: update -enduser -providers mullvad
+
+  #Prowlarr - manages your Sonarr, Radarr and download client
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    network_mode: "service:gluetun"
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${BASE_PATH}/prowlarr/config:/config
+    restart: unless-stopped
+
+
+  #jellyseer - allows users to request media on their own
+  jellyseerr:
+    image: fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${BASE_PATH}/jellyseerr/config:/app/config
+      - ${MEDIA_SHARE}:/data #Access to the entire ${BASE_PATH}
+    networks:
+      - proxy
+      - starr
+    ports:
+      - 5055:5055
+    restart: unless-stopped
+
+  #Flaresolerr - Used as a proxy server to bypass Cloudflare and DDoS-GUARD protection.
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    network_mode: "service:gluetun"
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - LOG_LEVEL=info
+      - LOG_HTML=false
+      - CAPTCHA_SOLVER=none
+      - TZ=${TZ}
+      - LANG=en_GB
+      - DRIVER=nodriver
+    restart: unless-stopped
+
+  #Qbittorent - torrenting software
+  #
+  #You can also use RuTorrent, Transmisson or Deluge
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    network_mode: "service:gluetun"
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - WEBUI_PORT=8080
+      - TORRENTING_PORT=8694 #Make sure to port forward this port in your router so you can seed more effectively
+      - UMASK=002
+    volumes:
+      - ${BASE_PATH}/qbittorent/config:/config
+      - ${MEDIA_SHARE}:/data
+
+    restart: unless-stopped
+
+  #Tdarr - to transcode videos from one format to another like x265 or H.265
+  #
+  #This container requires a decent amount of horse power to run but will save space in the long run
+  #tdarr:
+    #container_name: tdarr
+    #image: ghcr.io/haveagitgat/tdarr:latest
+    #restart: unless-stopped
+    #ports:
+     #- 8265:8265 # webUI port
+      #- 8266:8266 # server port
+    #environment:
+      #- TZ=${TZ}
+      #- PUID=${PUID}
+      #- PGID=${PGID}
+      #- UMASK_SET=002
+      #- nodeName=ServerNode
+      #- serverIP=0.0.0.0
+      #- serverPort=8266
+      #- webUIPort=8265
+      #- internalNode=true
+      #- inContainer=true
+      #- ffmpegVersion=6
+    #volumes:
+      #- ${BASE_PATH}/tdarr/server:/app/server
+      #- ${BASE_PATH}/tdarr/configs:/app/configs
+      #- ${BASE_PATH}/tdarr/logs:/app/logs
+      #- ${MEDIA_SHARE}:/data
+      #- ${TRANSCODE_PATH:-/transcode_cache}:/temp
+    #devices:
+     #- /dev/dri:/dev/dri #Required for HW transcoding /share QuickSync
+    #networks:
+      #- proxy
+
+  #Wizarr - Allows you to create a share link that you can send to users to invite them to your media server
+  wizarr:
+    container_name: wizarr
+    image: ghcr.io/wizarrrr/wizarr:latest
+    restart: unless-stopped
+    ports:
+      - 5690:5690
+    volumes:
+      - ${BASE_PATH}/wizarr/data/database:/data/database
+    networks:
+      - proxy
+      - starr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - APP_URL=${WIZARR_URL} #URL at which you will access and share 
+      - DISABLE_BUILTIN_AUTH=false #Set to true ONLY if you are using another auth provider (Authelia, Authentik, etc)
+      - TZ=${TZ} #Set your timezone here
+
+  #Dozzle - Used to easily view logs of any container in real time!    
+  dozzle:
+    container_name: dozzle
+    image: amir20/dozzle:latest
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - 9999:8080
+
+  homarr:
+    container_name: homarr
+    image: ghcr.io/ajnart/homarr:latest
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # Optional, only if you want docker integration
+      - ${BASE_PATH}/homarr/configs:/app/data/configs
+      - ${BASE_PATH}/homarr/icons:/app/public/icons
+      - ${BASE_PATH}/homarr/data:/data
+    ports:
+      - 7575:7575
+    networks:
+      - proxy
+
+  decluttarr:
+    image: ghcr.io/manimatter/decluttarr:latest
+    container_name: decluttarr
+    restart: unless-stopped
+    environment:
+     PUID: ${PUID}
+     PGID: ${PGID}
+     TZ: ${TZ}
+     ## General
+     # TEST_RUN=True
+     # SSL_VERIFICATION=False
+     LOG_LEVEL: INFO
+     ## Features 
+     REMOVE_TIMER: 10
+     REMOVE_FAILED: True
+     REMOVE_FAILED_IMPORTS: True
+     REMOVE_METADATA_MISSING: True
+     REMOVE_MISSING_FILES: True
+     REMOVE_ORPHANS: True
+     REMOVE_SLOW: True
+     REMOVE_STALLED: True
+     REMOVE_UNMONITORED: True
+     RUN_PERIODIC_RESCANS: '
+        {
+          "SONARR": {"MISSING": true, "CUTOFF_UNMET": true, "MAX_CONCURRENT_SCANS": 3, "MIN_DAYS_BEFORE_RESCAN": 7},
+          "RADARR": {"MISSING": true, "CUTOFF_UNMET": true, "MAX_CONCURRENT_SCANS": 3, "MIN_DAYS_BEFORE_RESCAN": 7}
+        }'
+     # Feature Settings
+     PERMITTED_ATTEMPTS: 3
+     NO_STALLED_REMOVAL_QBIT_TAG: Don't Kill
+     MIN_DOWNLOAD_SPEED: 100     
+     FAILED_IMPORT_MESSAGE_PATTERNS: '
+        [
+          "Not a Custom Format upgrade for existing", 
+          "Not an upgrade for existing"
+        ]'
+     ## Radarr
+     RADARR_URL: $RADARR_URL
+     RADARR_KEY: $RADARR_KEY
+     ## Sonarr
+     SONARR_URL: $SONARR_URL
+     SONARR_KEY: $SONARR_KEY
+     ## qBitorrent
+     QBITTORRENT_URL: $QBIT_URL
+     QBITTORRENT_USERNAME: $QBIT_USER
+     QBITTORRENT_PASSWORD: $QBIT_PASS
+    networks:
+      - starr
+      - proxy
+
+  jellystat-db:
+    image: postgres:15.2
+    container_name: jellystat-db
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      POSTGRES_DB: 'jfstat'
+      POSTGRES_USER: ${JELLYSTATDB_USER:-postgres}
+      POSTGRES_PASSWORD: ${JELLYSTATDB_PASS:-password}
+    volumes:
+      - ${BASE_PATH}/jellystat/postgres-data:/var/lib/postgresql/data # Mounting the volume
+    restart: unless-stopped
+    networks:
+      - jellystat
+
+  jellystat:
+    image: cyfershepard/jellystat:latest
+    container_name: jellystat
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      POSTGRES_USER: ${JELLYSTATDB_USER:-postgres}
+      POSTGRES_PASSWORD: ${JELLYSTATDB_PASS:-password}
+      POSTGRES_IP: jellystat-db
+      POSTGRES_PORT: 5432
+      JWT_SECRET: ${JWT_SECRET:-'my-secret-jwt-key'}
+    ports:
+      - 3000:3000 #Server Port
+    volumes:
+      - ${BASE_PATH}/jellystat/postgres-backup:/app/backend/backup-data # Mounting the volume
+    depends_on:
+      - jellystat-db
+    restart: unless-stopped
+    networks:
+      - jellystat
+      - proxy
+
+  configarr:
+    image: ghcr.io/raydak-labs/configarr:latest
+    container_name: configarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${BASE_PATH}/configarr/config:/app/config # Contains the config.yml and secrets.yml
+      - ${BASE_PATH}/configarr/dockerrepos:/app/repos # Cache repositories
+      - ${BASE_PATH}/configarr/custom/cfs:/app/cfs # Optional if custom formats locally provided
+      - ${BASE_PATH}/configarr/custom/templates:/app/templates # Optional if custom templates
+    restart: "no" # optional make sure this is set to no or removed. Default is no
+    depends_on:
+      - radarr
+      - sonarr
+    networks:
+      - proxy
+      - starr
+
+
+  gluetun-qbittorrent-port-manager:
+    image: snoringdragon/gluetun-qbittorrent-port-manager:latest
+    container_name: gluetun-qbittorrent-port-manager
+    restart: unless-stopped
+    volumes:
+      - ${BASE_PATH}/gluetun/tmp:/tmp/gluetun #Set "yourfolder" to the same directory you used for Gluetun
+    network_mode: "service:gluetun"
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      QBITTORRENT_SERVER: localhost # IP Address of qbittorrent
+      QBITTORRENT_PORT: 8080
+      QBITTORRENT_USER: ${QBIT_USER} # username
+      QBITTORRENT_PASS: ${QBIT_PASS} # password
+      PORT_FORWARDED: /tmp/gluetun/forwarded_port
+      HTTP_S: http # Select 'http' or 'https' depending on if you use certificates.
+
+
+
+  huntarr:
+    image: huntarr/huntarr:latest
+    container_name: huntarr
+    restart: always
+    ports:
+      - "9705:9705"
+    volumes:
+      - ${BASE_PATH}/huntarr:/config
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    networks:
+      - proxy
+
+  cleanuperr:
+    image: ghcr.io/flmorg/cleanuperr:latest
+    container_name: cleanuperr
+    restart: unless-stopped
+    volumes:
+      # if you want persistent logs
+      - ${BASE_PATH}/cleanuperr/logs:/var/logs
+      # if you want to ignore certain downloads from being processed
+      - ${BASE_PATH}/cleanuperr/ignored.txt:/ignored.txt
+      # if you're using cross-seed and the hardlinks functionality
+      - ${MEDIA_SHARE}/downloads:/downloads
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - DRY_RUN=false
+      - HTTP_MAX_RETRIES=0
+      - HTTP_TIMEOUT=100
+      - HTTP_VALIDATE_CERT=Enabled
+      
+      - LOGGING__LOGLEVEL=Information
+      - LOGGING__FILE__ENABLED=false
+      - LOGGING__FILE__PATH=/var/logs/
+      - LOGGING__ENHANCED=true
+      
+      - SEARCH_ENABLED=true
+      - SEARCH_DELAY=30
+      
+      - TRIGGERS__QUEUECLEANER=0 0/5 * * * ?
+      - QUEUECLEANER__ENABLED=true
+      - QUEUECLEANER__IGNORED_DOWNLOADS_PATH=/ignored.txt
+      - QUEUECLEANER__RUNSEQUENTIALLY=true
+      
+      - QUEUECLEANER__IMPORT_FAILED_MAX_STRIKES=5
+      - QUEUECLEANER__IMPORT_FAILED_IGNORE_PRIVATE=false
+      - QUEUECLEANER__IMPORT_FAILED_DELETE_PRIVATE=false
+      - QUEUECLEANER__IMPORT_FAILED_IGNORE_PATTERNS__0=title mismatch
+      - QUEUECLEANER__IMPORT_FAILED_IGNORE_PATTERNS__1=manual import required
+      
+      - QUEUECLEANER__STALLED_MAX_STRIKES=5
+      - QUEUECLEANER__STALLED_RESET_STRIKES_ON_PROGRESS=true
+      - QUEUECLEANER__STALLED_IGNORE_PRIVATE=false
+      - QUEUECLEANER__STALLED_DELETE_PRIVATE=false
+      - QUEUECLEANER__DOWNLOADING_METADATA_MAX_STRIKES=5
+      
+      - QUEUECLEANER__SLOW_MAX_STRIKES=5
+      - QUEUECLEANER__SLOW_RESET_STRIKES_ON_PROGRESS=true
+      - QUEUECLEANER__SLOW_IGNORE_PRIVATE=false
+      - QUEUECLEANER__SLOW_DELETE_PRIVATE=false
+      - QUEUECLEANER__SLOW_MIN_SPEED=1MB
+      - QUEUECLEANER__SLOW_MAX_TIME=20
+      - QUEUECLEANER__SLOW_IGNORE_ABOVE_SIZE=60GB
+      
+      - TRIGGERS__CONTENTBLOCKER=0 0/5 * * * ?
+      - CONTENTBLOCKER__ENABLED=true
+      - CONTENTBLOCKER__IGNORED_DOWNLOADS_PATH=/ignored.txt
+      - CONTENTBLOCKER__IGNORE_PRIVATE=false
+      - CONTENTBLOCKER__DELETE_PRIVATE=false
+      
+      - TRIGGERS__DOWNLOADCLEANER=0 0 * * * ?
+      - DOWNLOADCLEANER__ENABLED=true
+      - DOWNLOADCLEANER__IGNORED_DOWNLOADS_PATH=/ignored.txt
+      - DOWNLOADCLEANER__DELETE_PRIVATE=false
+      
+      - DOWNLOADCLEANER__CATEGORIES__0__NAME=tv-sonarr
+      - DOWNLOADCLEANER__CATEGORIES__0__MAX_RATIO=5
+      - DOWNLOADCLEANER__CATEGORIES__0__MIN_SEED_TIME=0
+      - DOWNLOADCLEANER__CATEGORIES__0__MAX_SEED_TIME=129600
+      - DOWNLOADCLEANER__CATEGORIES__1__NAME=anime-sonarr
+      - DOWNLOADCLEANER__CATEGORIES__1__MAX_RATIO=1
+      - DOWNLOADCLEANER__CATEGORIES__1__MIN_SEED_TIME=0
+      - DOWNLOADCLEANER__CATEGORIES__1__MAX_SEED_TIME=240
+      - DOWNLOADCLEANER__CATEGORIES__2__NAME=radarr
+      - DOWNLOADCLEANER__CATEGORIES__2__MAX_RATIO=5
+      - DOWNLOADCLEANER__CATEGORIES__2__MIN_SEED_TIME=0
+      - DOWNLOADCLEANER__CATEGORIES__2__MAX_SEED_TIME=129600
+      - DOWNLOADCLEANER__CATEGORIES__3__NAME=cleanuperr-unlinked
+      - DOWNLOADCLEANER__CATEGORIES__3__MAX_RATIO=5
+      - DOWNLOADCLEANER__CATEGORIES__3__MIN_SEED_TIME=0
+      - DOWNLOADCLEANER__CATEGORIES__3__MAX_SEED_TIME=129600
+      
+      - DOWNLOADCLEANER__UNLINKED_TARGET_CATEGORY=cleanuperr-unlinked
+      - DOWNLOADCLEANER__UNLINKED_USE_TAG=false
+      - DOWNLOADCLEANER__UNLINKED_IGNORED_ROOT_DIR=/downloads
+      - DOWNLOADCLEANER__UNLINKED_CATEGORIES__0=tv-sonarr
+      - DOWNLOADCLEANER__UNLINKED_CATEGORIES__1=anime-sonarr
+      - DOWNLOADCLEANER__UNLINKED_CATEGORIES__2=radarr
+              
+      - DOWNLOAD_CLIENT=qBittorrent
+      - QBITTORRENT__URL=${QBIT_URL}
+      - QBITTORRENT__USERNAME=${QBIT_USER}
+      - QBITTORRENT__PASSWORD=${QBIT_PASS}
+      
+      - SONARR__ENABLED=true
+      - SONARR__IMPORT_FAILED_MAX_STRIKES=-1
+      - SONARR__SEARCHTYPE=Episode
+
+      - SONARR__INSTANCES__0__URL=${SONARR_URL}
+      - SONARR__INSTANCES__0__APIKEY=${SONARR_KEY}
+      
+      - RADARR__ENABLED=true
+      - RADARR__IMPORT_FAILED_MAX_STRIKES=-1
+      - RADARR__INSTANCES__0__URL=${RADARR_URL}
+      - RADARR__INSTANCES__0__APIKEY=${RADARR_KEY}
+    networks:
+      - proxy
+      
+  suggestarr:
+    image: ciuse99/suggestarr:latest
+    container_name: suggestarr
+    restart: always
+    ports:
+      - 5000:5000
+    volumes:
+      - ${BASE_PATH}/suggestarr/config_files:/app/config/config_files
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - LOG_LEVEL=info
+      - SUGGESTARR_PORT=5000
+    networks:
+      - proxy
+      - starr
+      
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WATCHTOWER_DEBUG: true
+      TZ: ${TZ}
+      WATCHTOWER_CLEANUP: true
+      WATCHTOWER_LOG_LEVEL: info
+      WATCHTOWER_INCLUDE_STOPPED: true
+      WATCHTOWER_POLL_INTERVAL: 43200
+    networks:
+      - proxy
