@@ -13,8 +13,6 @@ networks:
     external: true
       
 services:
-  # REVERSE PROXY IS IN OTHER DOCKER COMPOSE STACK
-
   #Jellyfin - used to display the media
   #This can also be replaced by Emby/Plex
   jellyfin:
@@ -26,7 +24,6 @@ services:
       - JELLYFIN_PublishedServerUrl=${JELLYFIN_URL}
     group_add:
       - '993' # Change this to match your "render" host group id and remove this comment
-      - '44'
     ports:
       - 8096:8096
       - 8920:8920
@@ -85,6 +82,7 @@ services:
   gluetun:
     image: qmcgaw/gluetun:latest
     container_name: gluetun
+    user: ${PUID}:${PGID}
     cap_add:
       - NET_ADMIN
     restart: unless-stopped
@@ -93,8 +91,6 @@ services:
     volumes:
       - ${BASE_PATH}/gluetun/tmp:/tmp/gluetun
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
       # See https://github.com/qdm12/gluetun-wiki/tree/main/setup#setup
       - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
@@ -142,9 +138,8 @@ services:
   jellyseerr:
     image: fallenbagel/jellyseerr:latest
     container_name: jellyseerr
+    user: ${PUID}:${PGID}
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
       - TZ=${TZ}
     volumes:
       - ${BASE_PATH}/jellyseerr/config:/app/config
@@ -161,9 +156,8 @@ services:
     image: ghcr.io/flaresolverr/flaresolverr:latest
     container_name: flaresolverr
     network_mode: "service:gluetun"
+    user: ${PUID}:${PGID}
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
       - LOG_LEVEL=info
       - LOG_HTML=false
       - CAPTCHA_SOLVER=none
@@ -230,6 +224,7 @@ services:
     container_name: wizarr
     image: ghcr.io/wizarrrr/wizarr:latest
     restart: unless-stopped
+    user: ${PUID}:${PGID}
     ports:
       - 5690:5690
     volumes:
@@ -238,8 +233,6 @@ services:
       - proxy
       - starr
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
       - APP_URL=${WIZARR_URL} #URL at which you will access and share 
       - DISABLE_BUILTIN_AUTH=false #Set to true ONLY if you are using another auth provider (Authelia, Authentik, etc)
       - TZ=${TZ} #Set your timezone here
@@ -249,9 +242,7 @@ services:
     container_name: dozzle
     image: amir20/dozzle:latest
     restart: unless-stopped
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
+    user: ${PUID}:${PGID}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
@@ -261,9 +252,7 @@ services:
     container_name: homarr
     image: ghcr.io/ajnart/homarr:latest
     restart: unless-stopped
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
+    user: ${PUID}:${PGID}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Optional, only if you want docker integration
       - ${BASE_PATH}/homarr/configs:/app/data/configs
@@ -278,9 +267,8 @@ services:
     image: ghcr.io/manimatter/decluttarr:latest
     container_name: decluttarr
     restart: unless-stopped
+    user: ${PUID}:${PGID}
     environment:
-     PUID: ${PUID}
-     PGID: ${PGID}
      TZ: ${TZ}
      ## General
      # TEST_RUN=True
@@ -327,9 +315,8 @@ services:
   jellystat-db:
     image: postgres:15.2
     container_name: jellystat-db
+    user: ${PUID}:${PGID}
     environment:
-      PUID: ${PUID}
-      PGID: ${PGID}
       POSTGRES_DB: 'jfstat'
       POSTGRES_USER: ${JELLYSTATDB_USER:-postgres}
       POSTGRES_PASSWORD: ${JELLYSTATDB_PASS:-password}
@@ -342,9 +329,8 @@ services:
   jellystat:
     image: cyfershepard/jellystat:latest
     container_name: jellystat
+    user: ${PUID}:${PGID}
     environment:
-      PUID: ${PUID}
-      PGID: ${PGID}
       POSTGRES_USER: ${JELLYSTATDB_USER:-postgres}
       POSTGRES_PASSWORD: ${JELLYSTATDB_PASS:-password}
       POSTGRES_IP: jellystat-db
@@ -364,9 +350,8 @@ services:
   configarr:
     image: ghcr.io/raydak-labs/configarr:latest
     container_name: configarr
+    user: ${PUID}:${PGID}
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
       - TZ=${TZ}
     volumes:
       - ${BASE_PATH}/configarr/config:/app/config # Contains the config.yml and secrets.yml
@@ -385,13 +370,12 @@ services:
   gluetun-qbittorrent-port-manager:
     image: snoringdragon/gluetun-qbittorrent-port-manager:latest
     container_name: gluetun-qbittorrent-port-manager
+    user: ${PUID}:${PGID}
     restart: unless-stopped
     volumes:
       - ${BASE_PATH}/gluetun/tmp:/tmp/gluetun #Set "yourfolder" to the same directory you used for Gluetun
     network_mode: "service:gluetun"
     environment:
-      PUID: ${PUID}
-      PGID: ${PGID}
       QBITTORRENT_SERVER: localhost # IP Address of qbittorrent
       QBITTORRENT_PORT: 8080
       QBITTORRENT_USER: ${QBIT_USER} # username
@@ -405,13 +389,12 @@ services:
     image: huntarr/huntarr:latest
     container_name: huntarr
     restart: always
+    user: ${PUID}:${PGID}
     ports:
       - "9705:9705"
     volumes:
       - ${BASE_PATH}/huntarr:/config
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
       - TZ=${TZ}
     networks:
       - proxy
@@ -420,6 +403,7 @@ services:
     image: ghcr.io/flmorg/cleanuperr:latest
     container_name: cleanuperr
     restart: unless-stopped
+    user: ${PUID}:${PGID}
     volumes:
       # if you want persistent logs
       - ${BASE_PATH}/cleanuperr/logs:/var/logs
@@ -428,8 +412,6 @@ services:
       # if you're using cross-seed and the hardlinks functionality
       - ${MEDIA_SHARE}/downloads:/downloads
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
       - TZ=${TZ}
       - DRY_RUN=false
       - HTTP_MAX_RETRIES=0
@@ -527,13 +509,12 @@ services:
     image: ciuse99/suggestarr:latest
     container_name: suggestarr
     restart: always
+    user: ${PUID}:${PGID}
     ports:
       - 5000:5000
     volumes:
       - ${BASE_PATH}/suggestarr/config_files:/app/config/config_files
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
       - LOG_LEVEL=info
       - SUGGESTARR_PORT=5000
     networks:
@@ -543,6 +524,7 @@ services:
   watchtower:
     image: containrrr/watchtower
     container_name: watchtower
+    restart: always
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
